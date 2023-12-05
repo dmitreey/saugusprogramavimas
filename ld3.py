@@ -12,22 +12,22 @@ def is_prime(number):
             return False
     return True
 
-def producer(file_queue, file_names):
+def producer(file_queue, file_names, consumer_control):
     for file_name in file_names:
         with open(file_name, 'r') as file:
             numbers = [int(line.strip()) for line in file]
+            # Wait until there are consumer threads available
+            while consumer_control['desired'] == 0:
+                time.sleep(0.1)
             file_queue.put(numbers)
-    # Do not put a stop signal in the producer
+    # No stop signal needed as threads manage themselves
 
-def consumer(file_queue, stats, consumer_control):
+def consumer(file_queue, stats, consumer_control, thread_id):
     while True:
         with consumer_control['lock']:
-            if consumer_control['active'] > consumer_control['desired']:
+            if thread_id >= consumer_control['desired']:
                 break
         task = file_queue.get()
-        if task is None:  # Ignore None tasks, continue processing
-            file_queue.task_done()
-            continue
         for number in task:
             if is_prime(number):
                 with stats_lock:
@@ -39,11 +39,12 @@ def consumer(file_queue, stats, consumer_control):
     with consumer_control['lock']:
         consumer_control['active'] -= 1
 
-def adjust_threads(desired_num_threads):
+def adjust_threads(desired_num_threads, consumer_control):
     with consumer_control['lock']:
         consumer_control['desired'] = desired_num_threads
         while consumer_control['active'] < consumer_control['desired']:
-            t = threading.Thread(target=consumer, args=(file_queue, stats, consumer_control))
+            thread_id = consumer_control['active']
+            t = threading.Thread(target=consumer, args=(file_queue, stats, consumer_control, thread_id))
             t.daemon = True
             t.start()
             consumer_control['active'] += 1
@@ -79,17 +80,17 @@ class PrimeNumberApp:
 
     def increase_threads(self):
         new_thread_count = min(max_consumer_threads, consumer_control['desired'] + 1)
-        adjust_threads(new_thread_count)
+        adjust_threads(new_thread_count, consumer_control)
         self.update_thread_count()
 
     def decrease_threads(self):
         new_thread_count = max(0, consumer_control['desired'] - 1)
-        adjust_threads(new_thread_count)
+        adjust_threads(new_thread_count, consumer_control)
         self.update_thread_count()
 
     def update_thread_count(self):
         with consumer_control['lock']:
-            self.thread_count_var.set(f"Threads: {consumer_control['active']}")
+            self.thread_count_var.set(f"Threads: {consumer_control['desired']}")
 
     def update_stats(self):
         with stats_lock:
@@ -100,10 +101,9 @@ class PrimeNumberApp:
             self.min_prime_var.set(f"Min Prime: {min_prime}")
         self.root.after(1000, self.update_stats)
 
-# Start producer and initial consumer threads
-producer_thread = threading.Thread(target=producer, args=(file_queue, file_names))
+# Start producer and consumer threads
+producer_thread = threading.Thread(target=producer, args=(file_queue, file_names, consumer_control))
 producer_thread.start()
-adjust_threads(1)  # Start with 1 consumer thread
 
 # Start the GUI
 if __name__ == "__main__":
