@@ -3,6 +3,7 @@ from tkinter import ttk
 import threading
 import queue
 import time
+import random
 
 def is_prime(number):
     if number <= 1:
@@ -12,20 +13,21 @@ def is_prime(number):
             return False
     return True
 
-def producer(file_queue, file_names, consumer_control):
-    for file_name in file_names:
-        with open(file_name, 'r') as file:
-            numbers = [int(line.strip()) for line in file]
-            # Wait until there are consumer threads available
-            while consumer_control['desired'] == 0:
-                time.sleep(0.1)
-            file_queue.put(numbers)
-    # No stop signal needed as threads manage themselves
+def producer(file_queue, consumer_control):
+    workload_size = 100000  # Increased workload size
+    while True:
+        if consumer_control['desired'] > 0:
+            workload = [random.randint(1, 100000) for _ in range(workload_size)]
+            file_queue.put(workload)
+            time.sleep(0.5)  # Added a delay to prevent overloading the queue
+        else:
+            time.sleep(0.1)
 
 def consumer(file_queue, stats, consumer_control, thread_id):
     while True:
         with consumer_control['lock']:
             if thread_id >= consumer_control['desired']:
+                consumer_control['active'] -= 1
                 break
         task = file_queue.get()
         for number in task:
@@ -36,8 +38,6 @@ def consumer(file_queue, stats, consumer_control, thread_id):
         with stats_lock:
             stats['files_done'] += 1
         file_queue.task_done()
-    with consumer_control['lock']:
-        consumer_control['active'] -= 1
 
 def adjust_threads(desired_num_threads, consumer_control):
     with consumer_control['lock']:
@@ -49,15 +49,12 @@ def adjust_threads(desired_num_threads, consumer_control):
             t.start()
             consumer_control['active'] += 1
 
-# Shared resources and initial setup
-file_names = [f'file{i}.txt' for i in range(1, 1001)]  # Replace with actual file names
 file_queue = queue.Queue()
 stats = {'num_threads': 0, 'files_done': 0, 'min_prime': float('inf'), 'max_prime': 0}
 stats_lock = threading.Lock()
 consumer_control = {'active': 0, 'desired': 0, 'lock': threading.Lock()}
 max_consumer_threads = 10
 
-# GUI class
 class PrimeNumberApp:
     def __init__(self, root):
         self.root = root
@@ -101,12 +98,10 @@ class PrimeNumberApp:
             self.min_prime_var.set(f"Min Prime: {min_prime}")
         self.root.after(1000, self.update_stats)
 
-# Start producer and consumer threads
-producer_thread = threading.Thread(target=producer, args=(file_queue, file_names, consumer_control))
-producer_thread.start()
-
-# Start the GUI
 if __name__ == "__main__":
     root = tk.Tk()
     app = PrimeNumberApp(root)
+    producer_thread = threading.Thread(target=producer, args=(file_queue, consumer_control))
+    producer_thread.daemon = True
+    producer_thread.start()
     root.mainloop()
